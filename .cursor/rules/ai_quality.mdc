@@ -1,0 +1,124 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# <your‑project>/.cursor/.cursorrules
+rules:
+  – id: scaffold_project
+    applies_to: "init"
+    description: |
+      On new project init, generate this folder layout:
+      my_service/
+      ├── app/
+      │   ├── __init__.py
+      │   ├── models/
+      │   ├── services/
+      │   ├── utils/
+      │   └── config.py
+      ├── tests/
+      ├── requirements.txt
+      ├── .env.template
+      ├── Dockerfile
+      └── main.py
+    action:
+      type: generator
+      spec: project_structure.yaml
+
+  – id: pydantic_models_from_er
+    applies_to: "generate:models"
+    description: |
+      For each table in the ER spec, generate a Pydantic model in app/models/
+      with appropriate field types, defaults, and docstrings.
+    action:
+      type: prompt_template
+      template: |
+        “Generate a Pydantic BaseModel for the `<TableName>` table:
+         {{columns|name,type,nullable,default}} — include JSON schema examples.”
+
+  – id: service_layer_stubs
+    applies_to: "generate:services"
+    description: |
+      Create service classes under app/services/ for:
+      – QAReviewService  
+      – QAReviewItemService  
+      – QuestionRatingService  
+      Each with methods matching CRUD + business logic.
+    action:
+      type: prompt_template
+      template: |
+        “Create a `<ServiceName>` class with methods:
+         create_<entity>(), get_<entity>(), list_<entity>(), update_<entity>(), delete_<entity>().
+         Include type hints, docstrings, and raise HTTPException for error cases.”
+
+  – id: fastapi_endpoints
+    applies_to: "generate:api"
+    description: |
+      In main.py, scaffold FastAPI routers for:
+      – POST /aiqa/reviews  
+      – GET  /aiqa/reviews  
+      – GET  /aiqa/reviews/{id}  
+      – GET  /aiqa/reviews/{id}/items  
+      – GET  /aiqa/reviews/items/{id}  
+      Use ResponseModels matching Pydantic schemas.
+    action:
+      type: prompt_template
+      template: |
+        “Scaffold FastAPI endpoints in `app/main.py` for `<HTTP_METHOD> <PATH>`:
+         – Input model: `<PydanticModel>`
+         – Output model: `<ResponseModel>`
+         – Call service layer and return JSON.”
+
+  – id: config_settings
+    applies_to: "generate:config"
+    description: |
+      Use Pydantic BaseSettings in app/config.py to read:
+      – DATABASE_URL  
+      – MSG_QUEUE_URL  
+      – RAG_SERVICE_URL  
+      – any other .env vars  
+      Provide default values and validations.
+    action:
+      type: prompt_template
+      template: |
+        “Create a `Settings` class extending BaseSettings:
+         define fields for each env var, set `env_file='.env'`, include validators.”
+
+  – id: dockerfile_template
+    applies_to: "generate:Dockerfile"
+    description: |
+      Standard Python microservice Dockerfile:
+      – FROM python:3.x-slim  
+      – copy requirements.txt, pip install  
+      – copy app/, main.py  
+      – expose port, set ENTRYPOINT uvicorn main:app
+    action:
+      type: generator
+      spec: dockerfile.yaml
+
+  – id: tests_for_endpoints
+    applies_to: "generate:tests"
+    description: |
+      For each endpoint and service method, generate pytest modules under tests/
+      with fixtures, mocking external calls (DB, MQ, RAG).
+    action:
+      type: prompt_template
+      template: |
+        “Write pytest tests for `<endpoint_or_method>`:
+         – use TestClient for FastAPI endpoints
+         – stub service layer or external HTTP calls
+         – assert status codes, response shapes”
+
+  – id: ci_pipeline
+    applies_to: "generate:ci"
+    description: |
+      Generate a GitHub Actions workflow `.github/workflows/ci.yml` that:
+      – checks out code, sets up Python  
+      – installs dependencies  
+      – runs Black, flake8, mypy  
+      – runs pytest  
+      – on success, optionally builds & pushes Docker image
+    action:
+      type: generator
+      spec: github_ci.yaml
+
