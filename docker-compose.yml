@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  chat-data-service:
+    build:
+      context: .
+      dockerfile: dummy_services/Dockerfile.chat-data
+    ports:
+      - "8001:8001"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8001
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  rag-service:
+    build:
+      context: .
+      dockerfile: dummy_services/Dockerfile.rag
+    ports:
+      - "8002:8002"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8002
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  qa-analysis-service:
+    build:
+      context: qa_analysis_service
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - RAG_SERVICE_URL=http://rag-service:8002
+      - CHAT_DATA_SERVICE_URL=http://chat-data-service:8001
+      - HOST=0.0.0.0
+      - PORT=8000
+      - DEBUG=false
+    depends_on:
+      - chat-data-service
+      - rag-service
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  default:
+    name: qa-analysis-network 
