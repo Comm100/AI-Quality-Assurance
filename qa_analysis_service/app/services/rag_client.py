@@ -20,16 +20,16 @@ class RAGClientError(Exception):
 class RAGClient:
     """Client for interacting with the RAG service."""
     
-    def __init__(self, base_url: Optional[str] = None, timeout: int = 30):
+    def __init__(self, base_url: Optional[str] = None, timeout: Optional[int] = None):
         """Initialize the RAG client.
         
         Args:
             base_url: Base URL for the RAG service. Defaults to config setting.
-            timeout: Request timeout in seconds.
+            timeout: Request timeout in seconds. Defaults to config setting.
         """
         self.settings = settings
         self.base_url = base_url or settings.rag_service_url
-        self.timeout = timeout
+        self.timeout = timeout or getattr(settings, 'rag_service_timeout', 60)
         self.session = requests.Session()
         
         # Set default headers

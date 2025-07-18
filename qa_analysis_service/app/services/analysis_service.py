@@ -1,9 +1,8 @@
 """Core QA analysis service implementing the 3-stage algorithm."""
 import logging
-import re
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple, Optional
 from datetime import datetime
-from statistics import mean
+
 
 from ..config import settings
 from ..models.analysis import (
@@ -83,18 +82,14 @@ class AnalysisService:
                 if rating.aiScore >= 0:
                     scores.append(rating.aiScore)
             
-            # Calculate overall accuracy
-            overall_accuracy = mean(scores) if scores else 0.0
-            
             logger.info(f"Analysis completed for conversation {request.conversation.id}")
-            logger.info(f"Overall accuracy: {overall_accuracy:.2f}/5.0 over {len(scores)} in-scope Q&A pairs")
+            logger.info(f"Processed {len(scores)} in-scope Q&A pairs with scores: {[round(s, 1) for s in scores]}")
             
             return AnalysisResponse(
                 conversationId=request.conversation.id,
                 conversationType=request.conversation.type,
                 analysisTime=datetime.utcnow(),
-                questionRatings=question_ratings,
-                overallAccuracy=round(overall_accuracy, 2)
+                questionRatings=question_ratings
             )
             
         except Exception as e:
@@ -127,6 +122,11 @@ class AnalysisService:
             transcript_lines.append(f"{role_prefix} {time_str} {msg.content}")
         
         transcript = "\n".join(transcript_lines)
+        
+        # If no valid messages found, return empty list
+        if not transcript.strip():
+            logger.info("No valid Q&A pairs found in conversation")
+            return []
         
         # Use LLM to segment the transcript
         prompt = self.prompt_builder.split_prompt(transcript)
