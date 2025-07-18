@@ -1,7 +1,7 @@
 """Pydantic models for QA analysis operations."""
-from typing import List, Optional, Dict, Any, Literal
+from typing import List, Optional, Literal
 from datetime import datetime
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -63,7 +63,7 @@ class QuestionRating(BaseModel):
     aiSuggestedAnswer: str = Field(..., description="AI-generated golden answer, concise and accurate")
     aiScore: float = Field(
         ..., 
-        ge=0.0,
+        ge=0.0, 
         le=5.0, 
         description="AI quality score between 0.0 and 5.0"
     )
@@ -89,12 +89,6 @@ class AnalysisResponse(BaseModel):
     questionRatings: List[QuestionRating] = Field(
         ..., 
         description="List of question ratings with AI analysis"
-    )
-    overallAccuracy: float = Field(
-        ..., 
-        ge=0.0,
-        le=5.0,
-        description="Overall accuracy score averaged across all Q&A pairs"
     )
 
 
@@ -125,6 +119,6 @@ class RAGResponse(BaseModel):
     question: str = Field(..., description="The original question")
     chunks: List[KBChunk] = Field(..., description="Retrieved KB chunks")
     formatted_chunks: List[str] = Field(
-        ...,
+        ..., 
         description="Formatted chunks with source citations"
     ) 
