@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     # Chat data service configuration
     chat_data_service_url: str = os.getenv("CHAT_DATA_SERVICE_URL", "http://localhost:8001")
     
-    # OpenAI configuration - Set your API key here
+    # OpenAI configuration - Set your API key in environment variables
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4.1")
     openai_temperature: float = float(os.getenv("OPENAI_TEMPERATURE", "0.0"))
