@@ -49,22 +49,26 @@ def main():
     print("🚀 Starting AI Quality Assurance Development Environment")
     print("=" * 60)
     
+    # Get the project root directory (parent of scripts directory)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    
     # Service configurations
     services = [
         {
             "name": "Chat Data Service",
-            "command": "python dummy_services/chat_data_service/main.py",
-            "cwd": None
+            "command": "python main.py",
+            "cwd": os.path.join(project_root, "dummy_services", "chat_data_service")
         },
         {
             "name": "RAG Service", 
-            "command": "python dummy_services/rag_service/main.py",
-            "cwd": None
+            "command": "python main.py",
+            "cwd": os.path.join(project_root, "dummy_services", "rag_service")
         },
         {
             "name": "QA Analysis Service",
             "command": "python main.py",
-            "cwd": "qa_analysis_service"
+            "cwd": os.path.join(project_root, "qa_analysis_service")
         }
     ]
     

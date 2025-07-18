@@ -1,6 +1,6 @@
 """Client for communicating with the RAG service."""
 import logging
-from typing import Optional
+from typing import Optional, List
 
 import requests
 from requests.exceptions import RequestException, Timeout, ConnectionError
@@ -27,6 +27,7 @@ class RAGClient:
             base_url: Base URL for the RAG service. Defaults to config setting.
             timeout: Request timeout in seconds.
         """
+        self.settings = settings
         self.base_url = base_url or settings.rag_service_url
         self.timeout = timeout
         self.session = requests.Session()
@@ -37,35 +38,52 @@ class RAGClient:
             "Accept": "application/json"
         })
     
-    def generate_answer(self, question: str, context: Optional[str] = None) -> RAGResponse:
-        """Generate a reference answer for the given question.
+    def retrieve_chunks(self, question: str, k: int = 6) -> RAGResponse:
+        """Retrieve relevant KB chunks for the given question.
         
         Args:
-            question: The question to get a reference answer for.
-            context: Optional additional context for the question.
+            question: The question to get KB chunks for.
+            k: Number of chunks to retrieve.
             
         Returns:
-            RAGResponse: The response from the RAG service.
+            RAGResponse: The response from the RAG service with KB chunks.
             
         Raises:
             RAGClientError: If the request fails or returns an error.
         """
-        request_data = RAGRequest(question=question, context=context)
+        request_data = RAGRequest(question=question, k=k)
         
         try:
-            logger.info(f"Requesting answer for question: {question[:50]}...")
+            # Log RAG request details (debug mode only)
+            if self.settings.debug:
+                logger.info("🔄 RAG SERVICE REQUEST (DEBUG MODE):")
+                logger.info(f"  URL: {self.base_url}/retrieve-chunks")
+                logger.info(f"  Method: POST")
+                logger.info(f"  Request Data: {request_data.model_dump()}")
             
             response = self.session.post(
-                f"{self.base_url}/generate-answer",
+                f"{self.base_url}/retrieve-chunks",
                 json=request_data.model_dump(),
                 timeout=self.timeout
             )
             
             response.raise_for_status()
             
-            rag_response = RAGResponse(**response.json())
+            # Log RAG response details (debug mode only)
+            response_json = response.json()
+            rag_response = RAGResponse(**response_json)
             
-            logger.info(f"Received answer with confidence: {rag_response.confidence}")
+            if self.settings.debug:
+                logger.info("✅ RAG SERVICE RESPONSE (DEBUG MODE):")
+                logger.info(f"  Status Code: {response.status_code}")
+                logger.info(f"  Response Size: {len(str(response_json))} characters")
+                logger.info(f"  Number of chunks returned: {len(rag_response.chunks)}")
+                logger.info(f"  Question processed: {rag_response.question}")
+                
+                for i, chunk in enumerate(rag_response.chunks):
+                    logger.info(f"    Chunk {i+1} (confidence: {chunk.confidence:.2f}): {chunk.content[:80]}..." if len(chunk.content) > 80 else f"    Chunk {i+1} (confidence: {chunk.confidence:.2f}): {chunk.content}")
+            else:
+                logger.info(f"RAG service returned {len(rag_response.chunks)} chunks")
             
             return rag_response
             

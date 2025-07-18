@@ -4,6 +4,7 @@ import requests
 import json
 import time
 import sys
+import os
 
 
 def test_service_health(url: str, service_name: str) -> bool:
@@ -53,33 +54,35 @@ def test_chat_data_service() -> bool:
 
 
 def test_rag_service() -> bool:
-    """Test the RAG Service."""
-    print("\n🧪 Testing RAG Service...")
+    """Test the RAG Service v2."""
+    print("\n🧪 Testing RAG Service v2...")
     
     # Test health
     if not test_service_health("http://localhost:8002/health", "RAG Service"):
         return False
     
-    # Test generating answer
+    # Test retrieving chunks
     try:
         test_request = {
-            "question": "How do I enable email notifications?",
-            "context": "User needs help with settings"
+            "question": "How do I filter unpaid invoices?",
+            "k": 6
         }
         
         response = requests.post(
-            "http://localhost:8002/generate-answer", 
+            "http://localhost:8002/retrieve-chunks", 
             json=test_request,
             timeout=10
         )
         
         if response.status_code == 200:
             result = response.json()
-            print(f"✅ Generated answer: {result['answer'][:50]}...")
-            print(f"✅ Confidence: {result['confidence']}")
+            print(f"✅ Retrieved {len(result['chunks'])} KB chunks")
+            if result['chunks']:
+                print(f"✅ Top chunk: {result['chunks'][0]['content'][:50]}...")
+                print(f"✅ Confidence: {result['chunks'][0]['confidence']}")
             return True
         else:
-            print(f"❌ Failed to generate answer: {response.status_code}")
+            print(f"❌ Failed to retrieve chunks: {response.status_code}")
             return False
     except Exception as e:
         print(f"❌ Error testing RAG Service: {e}")
@@ -87,46 +90,99 @@ def test_rag_service() -> bool:
 
 
 def test_qa_analysis_service() -> bool:
-    """Test the QA Analysis Service."""
-    print("\n🧪 Testing QA Analysis Service...")
+    """Test the QA Analysis Service with 3-stage algorithm."""
+    print("\n🧪 Testing QA Analysis Service (3-Stage Algorithm)...")
     
     # Test health
     if not test_service_health("http://localhost:8000/health", "QA Analysis Service"):
         return False
     
-    # Test analysis with sample transcript
+    # Test analysis with sample conversation
     try:
-        sample_transcript = """
-Agent: Hello! How can I help you today?
-Customer: Hi, I'm having trouble with email notifications.
-Agent: I'd be happy to help with that. What specific issue are you experiencing?
-Customer: I can't find where to enable notifications.
-Agent: Go to Settings > Notifications > Email Settings and check the notification boxes.
-Customer: That worked! Thank you.
-        """.strip()
-        
         test_request = {
-            "transcript": sample_transcript,
-            "transcript_id": "test_001",
-            "metadata": {"test": True}
+            "conversation": {
+                "id": 12345,
+                "type": "chat",
+                "messages": [
+                    {
+                        "id": "msg_001",
+                        "role": "customer",
+                        "content": "Hey, I just saw an alert about unpaid invoices—where do I check them?",
+                        "timestamp": "2024-01-15T08:50:00Z"
+                    },
+                    {
+                        "id": "msg_002",
+                        "role": "agent",
+                        "content": "Sure—head over to Billing → Invoices and you'll see all your bills.",
+                        "timestamp": "2024-01-15T08:51:00Z"
+                    },
+                    {
+                        "id": "msg_003",
+                        "role": "customer",
+                        "content": "In 'Invoices' I only see paid ones. How do I filter unpaid?",
+                        "timestamp": "2024-01-15T08:53:00Z"
+                    },
+                    {
+                        "id": "msg_004",
+                        "role": "agent",
+                        "content": "There's a 'Status' dropdown up top—select 'Unpaid.'",
+                        "timestamp": "2024-01-15T08:54:00Z"
+                    },
+                    {
+                        "id": "msg_005",
+                        "role": "customer",
+                        "content": "I need to disable 2FA just this once—how?",
+                        "timestamp": "2024-01-15T09:12:00Z"
+                    },
+                    {
+                        "id": "msg_006",
+                        "role": "agent",
+                        "content": "In Security Settings there's a 'Disable 2FA' toggle.",
+                        "timestamp": "2024-01-15T09:13:00Z"
+                    },
+                    {
+                        "id": "msg_007",
+                        "role": "customer",
+                        "content": "I don't see that toggle in Security Settings.",
+                        "timestamp": "2024-01-15T09:15:00Z"
+                    },
+                    {
+                        "id": "msg_008",
+                        "role": "agent",
+                        "content": "You might not have permission—ask your admin to disable it.",
+                        "timestamp": "2024-01-15T09:16:00Z"
+                    }
+                ]
+            },
+            "integratedKbId": "kb_12345"
         }
         
         response = requests.post(
-            "http://localhost:8000/analyze", 
+            "http://localhost:8000/aiqa/analysis/analyze", 
             json=test_request,
-            timeout=30
+            timeout=60  # Increased timeout for LLM calls
         )
         
         if response.status_code == 200:
             result = response.json()
-            print(f"✅ Analysis completed for {result['total_questions']} questions")
-            print(f"✅ Overall score: {result['overall_score']:.2f}")
-            print(f"✅ Processing time: {result['processing_time_ms']}ms")
+            print(f"✅ Analysis completed for conversation {result['conversationId']}")
+            print(f"✅ Conversation type: {result['conversationType']}")
+            print(f"✅ Number of question ratings: {len(result['questionRatings'])}")
+            print(f"✅ Overall accuracy: {result['overallAccuracy']}/5.0")
             
-            # Show first Q&A pair details
-            if result['qa_pairs']:
-                first_qa = result['qa_pairs'][0]
-                print(f"✅ First Q&A accuracy: {first_qa['accuracy_score']:.2f}")
+            print("\n--- 3-Stage Analysis Details ---")
+            
+            # Show details for each question rating
+            if result['questionRatings']:
+                for i, rating in enumerate(result['questionRatings']):
+                    print(f"\n[Question Rating #{i+1}]")
+                    print(f"  🔄 Stage 1 - Rewritten Question: {rating['aiRewrittenQuestion']}")
+                    print(f"  👤 Agent's Answer: {rating['agentAnswer']}")
+                    print(f"  🤖 Stage 2 - AI Suggested Answer: {rating['aiSuggestedAnswer']}")
+                    print(f"  📊 Stage 3 - AI Score: {rating['aiScore']}/5.0")
+                    print(f"  📝 Stage 3 - AI Rationale: {rating['aiRationale']}")
+            else:
+                print("No question ratings were generated from the conversation.")
             
             return True
         else:
@@ -140,7 +196,7 @@ Customer: That worked! Thank you.
 
 def main():
     """Run all service tests."""
-    print("🧪 AI Quality Assurance Service Test Suite")
+    print("🧪 AI Quality Assurance Service Test Suite (3-Stage Algorithm)")
     print("=" * 50)
     
     print("Waiting for services to start up...")
@@ -151,7 +207,7 @@ def main():
     # Test each service
     services = [
         ("Chat Data Service", test_chat_data_service),
-        ("RAG Service", test_rag_service),
+        ("RAG Service v2", test_rag_service),
         ("QA Analysis Service", test_qa_analysis_service)
     ]
     

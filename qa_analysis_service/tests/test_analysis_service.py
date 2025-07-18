@@ -1,173 +1,256 @@
 """Tests for the QA Analysis Service."""
 import pytest
+from datetime import datetime
 from unittest.mock import Mock, patch
-
-from app.models.analysis import AnalysisRequest, RAGResponse
+from app.models.analysis import (
+    AnalysisRequest,
+    AnalysisResponse,
+    Conversation,
+    Message,
+    QuestionRating,
+    ConversationThread,
+    AIAnswers,
+    AIAnswer,
+    RAGResponse,
+    KBChunk
+)
 from app.services.analysis_service import AnalysisService
 from app.services.rag_client import RAGClient
+from app.services.llm_client import LLMClient
 
 
-class TestAnalysisService:
-    """Test cases for AnalysisService."""
+@pytest.fixture
+def mock_rag_client():
+    """Create a mock RAG client."""
+    client = Mock(spec=RAGClient)
+    # Mock response for retrieve_chunks
+    client.retrieve_chunks.return_value = RAGResponse(
+        question="How do I filter unpaid invoices?",
+        chunks=[
+            KBChunk(
+                content="On the Invoices page, use the Status dropdown to choose Unpaid.",
+                source="billing/invoices.md",
+                confidence=0.95
+            )
+        ],
+        formatted_chunks=[
+            "On the Invoices page, use the Status dropdown to choose Unpaid. (source: billing/invoices.md)"
+        ]
+    )
+    return client
+
+
+@pytest.fixture
+def mock_llm_client():
+    """Create a mock LLM client."""
+    client = Mock(spec=LLMClient)
     
-    @pytest.fixture
-    def mock_rag_client(self):
-        """Create a mock RAG client."""
-        mock_client = Mock(spec=RAGClient)
-        mock_client.generate_answer.return_value = RAGResponse(
-            question="Test question",
-            answer="This is a test reference answer.",
-            confidence=0.9,
-            sources=["Test Source"]
-        )
-        return mock_client
+    # Mock Stage 1 response (thread segmentation)
+    client.chat_completion_json.side_effect = [
+        # First call: Stage 1 segmentation
+        {
+            "threads": [
+                {
+                    "qid": "T1",
+                    "question": "How do I filter unpaid invoices?",
+                    "answer": "Use the Status dropdown and select Unpaid."
+                }
+            ]
+        },
+        # Second call: Stage 2 AI answers
+        {
+            "ai_suggested_answer": {
+                "answer": "Select Unpaid in Status filter.",
+                "context": "[1]"
+            },
+            "ai_detailed_answer": {
+                "answer": "On the Invoices page, use the Status dropdown to choose Unpaid to filter unpaid invoices.",
+                "context": "[1]"
+            }
+        },
+        # Third call: Stage 3 scoring
+        {
+            "ai_score": 4.5,
+            "ai_rational": "Agent provided correct navigation but could be more specific about the 'Unpaid' option.",
+            "kb_verify": ["On the Invoices page, use the Status dropdown to choose Unpaid. (source: billing/invoices.md)"]
+        }
+    ]
     
-    @pytest.fixture
-    def analysis_service(self, mock_rag_client):
-        """Create an analysis service with mocked dependencies."""
-        return AnalysisService(rag_client=mock_rag_client)
-    
-    @pytest.fixture
-    def sample_transcript(self):
-        """Sample chat transcript for testing."""
-        return """
-Agent: Hello! How can I help you today?
-Customer: Hi, I'm having trouble with email notifications.
-Agent: I'd be happy to help with that. What specific issue are you experiencing?
-Customer: I can't find where to enable notifications.
-Agent: Go to Settings > Notifications > Email Settings and check the notification boxes.
-Customer: That worked! Thank you.
-Agent: You're welcome! Anything else?
-Customer: No, that's all.
-Agent: Have a great day!
-        """.strip()
-    
-    def test_segment_transcript_success(self, analysis_service, sample_transcript):
-        """Test successful transcript segmentation."""
-        # Test the private method directly for unit testing
-        qa_pairs = analysis_service._segment_transcript(sample_transcript)
-        
-        # Should extract Q&A pairs
-        assert len(qa_pairs) >= 1
-        
-        # Check first Q&A pair
-        question, answer = qa_pairs[0]
-        assert "trouble with email notifications" in question
-        assert "help with that" in answer
-    
-    def test_is_likely_question(self, analysis_service):
-        """Test question identification logic."""
-        # These should be identified as questions
-        assert analysis_service._is_likely_question("How do I enable notifications?")
-        assert analysis_service._is_likely_question("I'm having trouble with settings")
-        assert analysis_service._is_likely_question("Can you help me with this issue?")
-        assert analysis_service._is_likely_question("What should I do next?")
-        
-        # These should NOT be identified as questions
-        assert not analysis_service._is_likely_question("Hi")
-        assert not analysis_service._is_likely_question("Thank you")
-        assert not analysis_service._is_likely_question("Goodbye")
-    
-    def test_analyze_transcript_success(self, analysis_service, sample_transcript):
-        """Test successful transcript analysis."""
-        request = AnalysisRequest(
-            transcript=sample_transcript,
-            transcript_id="test_001"
-        )
-        
-        result = analysis_service.analyze_transcript(request)
-        
-        # Verify response structure
-        assert result.transcript_id == "test_001"
-        assert result.total_questions >= 1
-        assert len(result.qa_pairs) == result.total_questions
-        assert 0.0 <= result.overall_score <= 1.0
-        assert result.processing_time_ms is not None
-        
-        # Verify Q&A pairs
-        for qa_pair in result.qa_pairs:
-            assert qa_pair.question
-            assert qa_pair.agent_answer
-            assert qa_pair.reference_answer
-            assert 0.0 <= qa_pair.accuracy_score <= 1.0
-            assert 0.0 <= qa_pair.confidence_score <= 1.0
-    
-    def test_analyze_transcript_empty_input(self, analysis_service):
-        """Test analysis with empty transcript."""
-        request = AnalysisRequest(
-            transcript="",
-            transcript_id="test_empty"
-        )
-        
-        result = analysis_service.analyze_transcript(request)
-        
-        # Should handle empty input gracefully
-        assert result.total_questions == 0
-        assert len(result.qa_pairs) == 0
-        assert result.overall_score == 0.0
-    
-    def test_assess_accuracy(self, analysis_service):
-        """Test accuracy assessment logic."""
-        question = "How do I enable notifications?"
-        agent_answer = "Go to Settings > Notifications and enable email alerts."
-        reference_answer = "Navigate to Settings > Notifications > Email Settings and check notification boxes."
-        
-        accuracy, confidence, feedback = analysis_service._assess_accuracy(
-            question, agent_answer, reference_answer
-        )
-        
-        # Should have reasonable scores for similar answers
-        assert 0.0 <= accuracy <= 1.0
-        assert 0.0 <= confidence <= 1.0
-        assert isinstance(feedback, str)
-        assert len(feedback) > 0
-    
-    def test_calculate_overall_score(self, analysis_service):
-        """Test overall score calculation."""
-        from app.models.analysis import QuestionAnswerPair
-        
-        qa_pairs = [
-            QuestionAnswerPair(
-                question="Test 1",
-                agent_answer="Answer 1",
-                reference_answer="Ref 1",
-                accuracy_score=0.8,
-                confidence_score=0.9,
-                feedback="Good"
+    return client
+
+
+@pytest.fixture
+def analysis_service(mock_rag_client, mock_llm_client):
+    """Create an analysis service with mocked dependencies."""
+    return AnalysisService(rag_client=mock_rag_client, llm_client=mock_llm_client)
+
+
+@pytest.fixture
+def sample_conversation():
+    """Create a sample conversation for testing."""
+    return Conversation(
+        id=12345,
+        type="chat",
+        messages=[
+            Message(
+                id="1",
+                role="customer",
+                content="How do I filter unpaid invoices?",
+                timestamp=datetime.utcnow()
             ),
-            QuestionAnswerPair(
-                question="Test 2", 
-                agent_answer="Answer 2",
-                reference_answer="Ref 2",
-                accuracy_score=0.6,
-                confidence_score=0.7,
-                feedback="OK"
+            Message(
+                id="2",
+                role="agent",
+                content="Use the Status dropdown and select Unpaid.",
+                timestamp=datetime.utcnow()
             )
         ]
-        
-        overall_score = analysis_service._calculate_overall_score(qa_pairs)
-        
-        # Should be weighted average, closer to higher confidence scores
-        assert 0.0 <= overall_score <= 1.0
-        assert overall_score > 0.6  # Should be above the lower score due to weighting
+    )
+
+
+def test_stage1_segment_conversation(analysis_service, sample_conversation):
+    """Test Stage 1: Conversation segmentation."""
+    threads = analysis_service._stage1_segment_conversation(sample_conversation)
     
-    def test_rag_client_error_handling(self, analysis_service, sample_transcript):
-        """Test handling of RAG client errors."""
-        from app.services.rag_client import RAGClientError
+    assert len(threads) == 1
+    assert threads[0].question == "How do I filter unpaid invoices?"
+    assert threads[0].answer == "Use the Status dropdown and select Unpaid."
+    assert threads[0].qid == "T1"
+
+
+def test_stage2_generate_ai_answers(analysis_service):
+    """Test Stage 2: AI answer generation."""
+    question = "How do I filter unpaid invoices?"
+    kb_id = "kb_001"
+    
+    kb_chunks, ai_answers = analysis_service._stage2_generate_ai_answers(question, kb_id)
+    
+    # Check KB chunks
+    assert len(kb_chunks) == 1
+    assert "Status dropdown" in kb_chunks[0]
+    
+    # Check AI answers
+    assert isinstance(ai_answers, AIAnswers)
+    assert ai_answers.suggested.answer == "Select Unpaid in Status filter."
+    assert ai_answers.detailed.answer == "On the Invoices page, use the Status dropdown to choose Unpaid to filter unpaid invoices."
+
+
+def test_stage3_score_agent_answer(analysis_service):
+    """Test Stage 3: Agent answer scoring."""
+    question = "How do I filter unpaid invoices?"
+    agent_answer = "Use the Status dropdown and select Unpaid."
+    ai_answers = AIAnswers(
+        short=AIAnswer(answer="Select Unpaid in Status filter.", context="[1]"),
+        long=AIAnswer(answer="On the Invoices page, use the Status dropdown to choose Unpaid.", context="[1]")
+    )
+    kb_chunks = ["On the Invoices page, use the Status dropdown to choose Unpaid. (source: billing/invoices.md)"]
+    
+    rating = analysis_service._stage3_score_agent_answer(question, agent_answer, ai_answers, kb_chunks)
+    
+    assert rating.aiScore == 4.5
+    assert "correct navigation" in rating.aiRationale
+    assert len(rating.kbVerify) == 1
+
+
+def test_analyze_conversation_full_flow(analysis_service, sample_conversation):
+    """Test the complete analysis flow."""
+    request = AnalysisRequest(
+        conversation=sample_conversation,
+        integratedKbId="kb_001"
+    )
+    
+    response = analysis_service.analyze_conversation(request)
+    
+    assert isinstance(response, AnalysisResponse)
+    assert response.conversationId == 12345
+    assert response.conversationType == "chat"
+    assert len(response.questionRatings) == 1
+    
+    rating = response.questionRatings[0]
+    assert rating.aiRewrittenQuestion == "How do I filter unpaid invoices?"
+    assert rating.agentAnswer == "Use the Status dropdown and select Unpaid."
+    assert rating.aiScore == 4.5
+    assert response.overallAccuracy == 4.5
+
+
+def test_fallback_when_llm_fails(mock_rag_client):
+    """Test fallback behavior when LLM client fails."""
+    # Create a failing LLM client
+    failing_llm = Mock(spec=LLMClient)
+    failing_llm.chat_completion_json.side_effect = Exception("LLM API error")
+    
+    service = AnalysisService(rag_client=mock_rag_client, llm_client=failing_llm)
+    
+    conversation = Conversation(
+        id=1,
+        type="chat",
+        messages=[
+            Message(id="1", role="customer", content="Test question?", timestamp=datetime.utcnow()),
+            Message(id="2", role="agent", content="Test answer.", timestamp=datetime.utcnow())
+        ]
+    )
+    
+    # Should fall back to simple extraction
+    threads = service._stage1_segment_conversation(conversation)
+    assert len(threads) == 1
+    assert threads[0].question == "Test question?"
+
+
+def test_empty_conversation():
+    """Test handling of empty conversations."""
+    service = AnalysisService()
+    
+    empty_conv = Conversation(
+        id=1,
+        type="chat",
+        messages=[]
+    )
+    
+    request = AnalysisRequest(
+        conversation=empty_conv,
+        integratedKbId="kb_001"
+    )
+    
+    response = service.analyze_conversation(request)
+    assert len(response.questionRatings) == 0
+    assert response.overallAccuracy == 0.0
+
+
+def test_out_of_scope_scoring():
+    """Test handling of out-of-scope answers (score = -1)."""
+    mock_llm = Mock(spec=LLMClient)
+    mock_llm.chat_completion_json.side_effect = [
+        {"threads": [{"qid": "T1", "question": "Q1", "answer": "A1"}]},
+                    {"ai_suggested_answer": {"answer": "AI1", "context": ""}, "ai_detailed_answer": {"answer": "AI1 Long", "context": ""}},
+        {"ai_score": -1, "ai_rational": "Out of scope", "kb_verify": []},
+        {"threads": [{"qid": "T2", "question": "Q2", "answer": "A2"}]},
+                    {"ai_suggested_answer": {"answer": "AI2", "context": ""}, "ai_detailed_answer": {"answer": "AI2 Long", "context": ""}},
+        {"ai_score": 5, "ai_rational": "Perfect", "kb_verify": []}
+    ]
+    
+    service = AnalysisService(llm_client=mock_llm)
+    
+    # Create conversation with multiple Q&A pairs
+    conversation = Conversation(
+        id=1,
+        type="chat",
+        messages=[
+            Message(id="1", role="customer", content="Q1", timestamp=datetime.utcnow()),
+            Message(id="2", role="agent", content="A1", timestamp=datetime.utcnow()),
+            Message(id="3", role="customer", content="Q2", timestamp=datetime.utcnow()),
+            Message(id="4", role="agent", content="A2", timestamp=datetime.utcnow())
+        ]
+    )
+    
+    # Need to mock multiple analyze calls
+    with patch.object(service, '_stage1_segment_conversation') as mock_stage1:
+        mock_stage1.return_value = [
+            ConversationThread(qid="T1", question="Q1", answer="A1"),
+            ConversationThread(qid="T2", question="Q2", answer="A2")
+        ]
         
-        # Mock RAG client to raise an error
-        analysis_service.rag_client.generate_answer.side_effect = RAGClientError("Service unavailable")
+        request = AnalysisRequest(conversation=conversation, integratedKbId="kb_001")
+        response = service.analyze_conversation(request)
         
-        request = AnalysisRequest(
-            transcript=sample_transcript,
-            transcript_id="test_error"
-        )
-        
-        result = analysis_service.analyze_transcript(request)
-        
-        # Should handle error gracefully with fallback
-        assert result.total_questions >= 0
-        for qa_pair in result.qa_pairs:
-            assert qa_pair.accuracy_score == 0.5  # Fallback score
-            assert qa_pair.confidence_score == 0.0  # No confidence without RAG
-            assert "RAG service unavailable" in qa_pair.feedback 
+        # Overall accuracy should only include score >= 0 (exclude -1)
+        assert response.overallAccuracy == 5.0  # Only the score of 5 is counted 

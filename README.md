@@ -1,198 +1,212 @@
-# AI Quality Assurance Project
+# AI Quality Assurance System
 
-This project contains the `QA Analysis Service`, a microservice responsible for performing comprehensive quality assurance analysis on chat and ticket transcripts.
+A comprehensive microservices-based system for analyzing and scoring customer support conversations using a sophisticated 3-stage AI algorithm.
 
-## 🏗️ Architecture
+## Overview
 
-The project consists of three services:
+This system implements an advanced quality assurance algorithm that:
+1. **Stage 1**: Segments conversations into meaningful Q&A threads using LLM
+2. **Stage 2**: Retrieves relevant KB chunks and generates AI reference answers (short & long)
+3. **Stage 3**: Scores agent responses against AI references and KB evidence
 
-1. **QA Analysis Service** (Port 8000) - Main service that analyzes chat transcripts
-2. **Chat Data Service** (Port 8001) - Dummy service providing sample chat transcripts  
-3. **RAG Service** (Port 8002) - Dummy service providing reference answers from knowledge base
+## Architecture
 
-## 🚀 Quick Start
+The system consists of three microservices:
 
-### Option 1: Using Python Scripts (Recommended for Development)
+### 1. Chat Data Service (Port 8001)
+- Provides sample chat transcripts
+- Simulates a real chat data source
 
-1. **Install Dependencies**
-   ```bash
-   # Install QA Analysis Service dependencies
-   cd qa_analysis_service
-   pip install -r requirements.txt
-   cd ..
+### 2. RAG Service v2 (Port 8002)  
+- Retrieves relevant knowledge base chunks
+- Returns multiple KB passages with confidence scores
+- Supports configurable chunk retrieval (k parameter)
 
-   # Install dummy services dependencies  
-   pip install -r dummy_services/requirements.txt
-   ```
+### 3. QA Analysis Service (Port 8000)
+- Implements the 3-stage analysis algorithm
+- Uses OpenAI GPT for intelligent processing
+- Provides comprehensive scoring and rationale
 
-2. **Start All Services**
-   ```bash
-   python scripts/start_all_services.py
-   ```
+## 3-Stage Algorithm Details
 
-3. **Test Services**
-   ```bash
-   # In another terminal
-   python scripts/test_services.py
-   ```
+### Stage 1: Conversation Segmentation
+- Uses LLM to intelligently group customer messages by intent
+- Pairs customer questions with corresponding agent answers
+- Handles multi-turn conversations effectively
 
-### Option 2: Using Docker Compose
+### Stage 2: AI Answer Generation
+- Retrieves relevant KB chunks using semantic search
+- Generates two AI reference answers:
+  - **Short Answer**: Concise, direct response
+  - **Long Answer**: Detailed explanation with context
+- Strictly grounds answers in KB evidence
 
+### Stage 3: Agent Scoring
+- Compares agent answers against AI references
+- Scores on a scale from -1 to 5:
+  - 5: Perfect alignment with KB
+  - 4: Minor discrepancies
+  - 3: Good but missing details
+  - 2: Partially correct
+  - 1: Mostly incorrect
+  - 0: Completely wrong
+  - -1: Out of scope (not in KB)
+- Provides detailed rationale for each score
+
+## Prerequisites
+
+- Python 3.12+
+- Docker and Docker Compose
+- OpenAI API key
+
+## Setup
+
+1. Clone the repository:
 ```bash
-# Build and start all services
-docker-compose up --build
+git clone <repository-url>
+cd AI-Quality-Assurance
+```
 
-# Test services
+2. Create a `.env` file with your OpenAI API key:
+```bash
+# Copy from .env.example if available
+OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_TEMPERATURE=0.0
+```
+
+3. Install dependencies (optional for local development):
+```bash
+pip install -r qa_analysis_service/requirements.txt
+```
+
+## Running the Services
+
+### Using Docker Compose (Recommended)
+```bash
+docker-compose up --build
+```
+
+### Using Python Script
+```bash
+python scripts/start_all_services.py
+```
+
+### Manual Start (for development)
+```bash
+# Terminal 1: Chat Data Service
+cd dummy_services && python chat_data_service/main.py
+
+# Terminal 2: RAG Service
+cd dummy_services && python rag_service/main.py
+
+# Terminal 3: QA Analysis Service
+cd qa_analysis_service && python main.py
+```
+
+## Testing
+
+Run the comprehensive test suite:
+```bash
 python scripts/test_services.py
 ```
 
-## 📋 API Usage
+This will:
+- Verify all services are healthy
+- Test the RAG chunk retrieval
+- Run a complete 3-stage analysis on sample conversations
+- Display detailed results including scores and rationale
+
+## API Endpoints
 
 ### QA Analysis Service
+- `GET /` - Service info
+- `GET /health` - Health check
+- `POST /analyze` - Analyze a conversation
 
-**Analyze a transcript:**
-```bash
-curl -X POST "http://localhost:8000/analyze" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "transcript": "Agent: Hello! How can I help?\nCustomer: I need help with notifications.\nAgent: Go to Settings > Notifications.",
-    "transcript_id": "chat_001"
-  }'
-```
-
-**Health check:**
-```bash
-curl http://localhost:8000/health
-```
+### RAG Service v2
+- `GET /` - Service info
+- `GET /health` - Health check
+- `POST /retrieve-chunks` - Retrieve KB chunks for a question
 
 ### Chat Data Service
+- `GET /` - Service info
+- `GET /transcripts` - Get sample transcripts
+- `GET /transcript/{id}` - Get specific transcript
 
-**Get sample transcripts:**
-```bash
-curl http://localhost:8001/transcripts
+## Example Analysis Request
+
+```json
+{
+  "conversation": {
+    "id": 12345,
+    "type": "chat",
+    "messages": [
+      {
+        "id": "1",
+        "role": "customer",
+        "content": "How do I filter unpaid invoices?",
+        "timestamp": "2024-01-15T08:50:00Z"
+      },
+      {
+        "id": "2", 
+        "role": "agent",
+        "content": "Go to Billing → Invoices and use the Status dropdown.",
+        "timestamp": "2024-01-15T08:51:00Z"
+      }
+    ]
+  },
+  "integratedKbId": "kb_001"
+}
 ```
 
-**Get specific transcript:**
-```bash
-curl http://localhost:8001/transcripts/chat_001
+## Example Response
+
+```json
+{
+  "conversationId": 12345,
+  "conversationType": "chat",
+  "analysisTime": "2024-01-15T10:00:00Z",
+  "overallAccuracy": 4.5,
+  "questionRatings": [
+    {
+      "aiRewrittenQuestion": "How do I filter unpaid invoices?",
+      "agentAnswer": "Go to Billing → Invoices and use the Status dropdown.",
+      "aiShortAnswer": "Select Unpaid in Status filter.",
+      "aiLongAnswer": "On the Invoices page, use the Status dropdown to choose Unpaid...",
+      "aiScore": 4.5,
+      "aiRationale": "Agent provided correct navigation but could mention 'Unpaid' option explicitly.",
+      "kbVerify": [
+        "On the Invoices page, use the Status dropdown to choose Unpaid. (source: billing/invoices.md)"
+      ]
+    }
+  ]
+}
 ```
 
-### RAG Service
+## Development
 
-**Generate reference answer:**
-```bash
-curl -X POST "http://localhost:8002/generate-answer" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "question": "How do I enable email notifications?",
-    "context": "User needs help with settings"
-  }'
-```
+### Adding New KB Content
+Edit `dummy_services/rag_service/main.py` to add new knowledge base chunks in the `KNOWLEDGE_BASE_CHUNKS` dictionary.
 
-## 🧪 Testing
+### Modifying Prompts
+Edit `qa_analysis_service/app/services/prompt_builder.py` to adjust:
+- System prompts for each stage
+- Few-shot examples
+- Scoring rubrics
 
-Run the test suite:
-```bash
-cd qa_analysis_service
-pytest tests/ -v
-```
+### Changing Models
+Update the `.env` file or environment variables:
+- `OPENAI_MODEL`: Change to `gpt-4`, `gpt-3.5-turbo`, etc.
+- `OPENAI_TEMPERATURE`: Adjust for more/less deterministic responses
 
-## 📊 Service Documentation
+## Troubleshooting
 
-- QA Analysis Service: http://localhost:8000/docs
-- Chat Data Service: http://localhost:8001/docs  
-- RAG Service: http://localhost:8002/docs
+1. **Services not starting**: Check port availability (8000, 8001, 8002)
+2. **OpenAI errors**: Verify API key is set correctly
+3. **Low scores**: Check if KB chunks match the conversation topic
+4. **Timeout errors**: Increase timeout in client code for slow LLM responses
 
-## Implementation Plan
+## License
 
-This plan outlines the steps to develop, test, and deploy the `QA Analysis Service`.
-
-### 1. Project Scaffolding ✅
-
-- [x] Initialize the project structure based on the `scaffold_project` rule in `.cursor/rules/ai_quality.mdc`. This will create a standard FastAPI service layout.
-- [x] Rename the service from `my_service` to `qa_analysis_service`.
-- [x] Set up a Python virtual environment.
-- [x] Create a `requirements.txt` file with initial dependencies:
-    - `fastapi`
-    - `uvicorn[standard]`
-    - `pydantic`
-    - `pydantic-settings`
-    - `requests` (for communicating with other services)
-    - `pytest` (for testing)
-
-### 2. API Definition ✅
-
-- [x] **Define Pydantic Models (`app/models`):**
-    - Create `AnalysisRequest` model: To accept a chat/ticket transcript string and any relevant metadata.
-    - Create `AnalysisResponse` model: To return the analysis results, including:
-        - A list of segmented Question & Answer pairs.
-        - The AI-generated reference answer for each question.
-        - The accuracy assessment for each question.
-- [x] **Create FastAPI Endpoint (`main.py`):**
-    - Implement a `POST /analyze` endpoint that accepts `AnalysisRequest` and returns `AnalysisResponse`.
-
-### 3. Dependency Mocking & Integration ✅
-
-- [x] **Define RAG Service Contract:**
-    - Formally define the request/response for the `RAG Service`'s `POST /generate-answer` endpoint.
-- [x] **Create Mock RAG Service:**
-    - Develop a simple, local mock server using FastAPI that implements the RAG Service contract. It takes a question and returns a reference answer with confidence scores.
-- [x] **Create Mock Chat Data Service:**
-    - Develop a dummy service that provides sample chat transcripts for testing.
-- [x] **Implement API Client (`app/services`):**
-    - Create a client class responsible for making HTTP requests to the RAG Service.
-
-### 4. Core Service Logic (`app/services`) ✅
-
-- [x] **Create `AnalysisService`:**
-    - Implement a service class in `app/services/analysis_service.py` to encapsulate the core business logic.
-- [x] **Implement Transcript Segmentation:**
-    - Develop the algorithm to parse a raw transcript and segment it into a structured list of Q&A pairs.
-- [x] **Integrate RAG Service:**
-    - For each question identified in the segmentation step, use the API client to call the (mock) RAG service to fetch the reference answer.
-- [x] **Implement Accuracy Assessment:**
-    - Develop the logic to compare the agent's answer with the RAG-provided reference answer and generate an accuracy score or rating.
-
-### 5. Configuration ✅
-
-- [x] **Implement Settings Management (`app/config.py`):**
-    - Use Pydantic's `BaseSettings` to manage configuration from environment variables (`.env` file).
-    - Key configuration includes `RAG_SERVICE_URL` and `CHAT_DATA_SERVICE_URL`.
-
-### 6. Testing (`/tests`) ✅
-
-- [x] **Unit Tests:**
-    - Write tests for the transcript segmentation logic with various transcript formats.
-    - Write tests for the accuracy assessment logic.
-- [x] **Integration Tests:**
-    - Use FastAPI's `TestClient` to write tests for the `POST /analyze` endpoint.
-    - These tests mock the outbound call to the RAG service to ensure the service behaves correctly without a live dependency.
-
-### 7. Containerization & CI/CD ✅
-
-- [x] **Create `Dockerfile`:**
-    - Write a `Dockerfile` to containerize the `QA Analysis Service` for consistent deployment.
-- [x] **Create Docker Compose:**
-    - Set up `docker-compose.yml` to run all services together.
-- [ ] **Set up CI Pipeline (`.github/workflows/ci.yml`):**
-    - Create a GitHub Actions workflow that automatically runs on every push to:
-        - Install dependencies.
-        - Run linters (`black`, `flake8`).
-        - Run static type checks (`mypy`).
-        - Run all tests with `pytest`.
-
-## 🔧 Development Notes
-
-- All services use FastAPI for consistency
-- The RAG service uses simple keyword matching for demo purposes
-- The QA Analysis Service gracefully handles RAG service failures with fallback scoring
-- Services include comprehensive health checks and logging
-- Docker setup allows for easy deployment and scaling
-
-## 📝 Next Steps
-
-1. Set up GitHub Actions CI/CD pipeline
-2. Add more sophisticated accuracy assessment algorithms
-3. Implement proper authentication and authorization
-4. Add monitoring and metrics collection
-5. Scale for production workloads
+[Your License Here]

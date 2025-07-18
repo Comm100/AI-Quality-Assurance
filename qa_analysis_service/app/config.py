@@ -1,37 +1,38 @@
-"""Configuration settings for QA Analysis Service."""
-from typing import Optional
+"""Configuration settings for the QA Analysis Service."""
+import os
 
-from pydantic import Field
-from pydantic_settings import BaseSettings
+try:
+    from pydantic_settings import BaseSettings
+except ImportError:
+    from pydantic import BaseSettings
 
 
 class Settings(BaseSettings):
-    """Application settings loaded from environment variables."""
+    """Application settings."""
     
-    # External Service URLs
-    rag_service_url: str = Field(
-        default="http://localhost:8002",
-        description="URL for the RAG service that provides reference answers"
-    )
-    chat_data_service_url: str = Field(
-        default="http://localhost:8001", 
-        description="URL for the chat data service that provides transcripts"
-    )
+    # Service configuration
+    app_name: str = "QA Analysis Service"
+    debug: bool = os.getenv("DEBUG", "false").lower() == "true"
     
-    # Service Configuration
-    host: str = Field(default="0.0.0.0", description="Host to bind the service to")
-    port: int = Field(default=8000, description="Port to run the service on")
-    debug: bool = Field(default=False, description="Enable debug mode")
+    # RAG service configuration
+    rag_service_url: str = os.getenv("RAG_SERVICE_URL", "http://localhost:8002")
     
-    # API Configuration
-    api_title: str = Field(default="QA Analysis Service", description="API title")
-    api_version: str = Field(default="1.0.0", description="API version")
+    # Chat data service configuration
+    chat_data_service_url: str = os.getenv("CHAT_DATA_SERVICE_URL", "http://localhost:8001")
+    
+    # OpenAI configuration - Set your API key here
+    openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
+    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4.1")
+    openai_temperature: float = float(os.getenv("OPENAI_TEMPERATURE", "0.0"))
+    
+    # Analysis configuration
+    top_k_kb_chunks: int = int(os.getenv("TOP_K_KB_CHUNKS", "6"))
     
     class Config:
-        """Pydantic configuration."""
+        """Pydantic config."""
         env_file = ".env"
         env_file_encoding = "utf-8"
 
 
-# Global settings instance
+# Create settings instance
 settings = Settings() 

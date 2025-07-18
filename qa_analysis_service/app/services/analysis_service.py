@@ -1,291 +1,313 @@
-"""Core QA analysis service for processing chat transcripts."""
+"""Core QA analysis service implementing the 3-stage algorithm."""
 import logging
 import re
-import time
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 from datetime import datetime
+from statistics import mean
 
+from ..config import settings
 from ..models.analysis import (
     AnalysisRequest, 
     AnalysisResponse, 
-    QuestionAnswerPair
+    QuestionRating,
+    Message,
+    Conversation,
+    ConversationThread,
+    AIAnswers,
+    AIAnswer
 )
 from .rag_client import RAGClient, RAGClientError
+from .llm_client import LLMClient, LLMClientError
+from .prompt_builder import PromptBuilder
 
 
 logger = logging.getLogger(__name__)
 
 
 class AnalysisService:
-    """Service for performing comprehensive QA analysis on chat transcripts."""
+    """Service for performing comprehensive QA analysis using the 3-stage algorithm."""
     
-    def __init__(self, rag_client: Optional[RAGClient] = None):
+    def __init__(self, rag_client: Optional[RAGClient] = None, llm_client: Optional[LLMClient] = None):
         """Initialize the analysis service.
         
         Args:
-            rag_client: RAG client for getting reference answers. If None, creates default client.
+            rag_client: RAG client for retrieving KB chunks. If None, creates default client.
+            llm_client: LLM client for OpenAI calls. If None, creates default client.
         """
+        self.settings = settings
         self.rag_client = rag_client or RAGClient()
+        self.llm_client = llm_client or LLMClient(
+            api_key=settings.openai_api_key,
+            model=settings.openai_model,
+            temperature=settings.openai_temperature
+        )
+        self.prompt_builder = PromptBuilder()
     
-    def analyze_transcript(self, request: AnalysisRequest) -> AnalysisResponse:
-        """Analyze a chat transcript and return QA analysis results.
+    def analyze_conversation(self, request: AnalysisRequest) -> AnalysisResponse:
+        """Analyze a conversation using the 3-stage algorithm.
         
         Args:
-            request: The analysis request containing the transcript.
+            request: The analysis request containing the conversation and KB ID.
             
         Returns:
-            AnalysisResponse: The analysis results.
+            AnalysisResponse: The analysis results with question ratings.
         """
-        start_time = time.time()
-        
-        logger.info(f"Starting analysis for transcript: {request.transcript_id}")
+        logger.info(f"Starting 3-stage analysis for conversation: {request.conversation.id}")
         
         try:
-            # Step 1: Segment transcript into Q&A pairs
-            qa_pairs = self._segment_transcript(request.transcript)
-            logger.info(f"Extracted {len(qa_pairs)} Q&A pairs from transcript")
+            # Stage 1: Extract Q&A threads from conversation
+            threads = self._stage1_segment_conversation(request.conversation)
+            logger.info(f"Stage 1 complete: Extracted {len(threads)} Q&A threads")
             
-            # Step 2: Process each Q&A pair
-            analyzed_pairs = []
-            for question, agent_answer in qa_pairs:
-                analyzed_pair = self._analyze_qa_pair(question, agent_answer)
-                analyzed_pairs.append(analyzed_pair)
+            # Process each thread through stages 2 and 3
+            question_ratings = []
+            scores = []
             
-            # Step 3: Calculate overall score
-            overall_score = self._calculate_overall_score(analyzed_pairs)
+            for thread in threads:
+                # Stage 2: Retrieve KB chunks and generate AI answers
+                kb_chunks, ai_answers = self._stage2_generate_ai_answers(
+                    thread.question, 
+                    request.integratedKbId
+                )
+                
+                # Stage 3: Score the agent's answer
+                rating = self._stage3_score_agent_answer(
+                    thread.question,
+                    thread.answer,
+                    ai_answers,
+                    kb_chunks
+                )
+                
+                question_ratings.append(rating)
+                # Only include scores >= 0 in average (exclude out-of-scope -1 scores)
+                if rating.aiScore >= 0:
+                    scores.append(rating.aiScore)
             
-            # Calculate processing time
-            processing_time_ms = int((time.time() - start_time) * 1000)
+            # Calculate overall accuracy
+            overall_accuracy = mean(scores) if scores else 0.0
             
-            logger.info(f"Analysis completed in {processing_time_ms}ms with overall score: {overall_score}")
+            logger.info(f"Analysis completed for conversation {request.conversation.id}")
+            logger.info(f"Overall accuracy: {overall_accuracy:.2f}/5.0 over {len(scores)} in-scope Q&A pairs")
             
             return AnalysisResponse(
-                transcript_id=request.transcript_id,
-                qa_pairs=analyzed_pairs,
-                overall_score=overall_score,
-                total_questions=len(analyzed_pairs),
-                analysis_timestamp=datetime.utcnow(),
-                processing_time_ms=processing_time_ms
+                conversationId=request.conversation.id,
+                conversationType=request.conversation.type,
+                analysisTime=datetime.utcnow(),
+                questionRatings=question_ratings,
+                overallAccuracy=round(overall_accuracy, 2)
             )
             
         except Exception as e:
-            logger.error(f"Analysis failed for transcript {request.transcript_id}: {e}")
+            logger.error(f"Analysis failed for conversation {request.conversation.id}: {e}")
             raise
     
-    def _segment_transcript(self, transcript: str) -> List[Tuple[str, str]]:
-        """Segment a transcript into question-answer pairs.
+    def _stage1_segment_conversation(self, conversation: Conversation) -> List[ConversationThread]:
+        """Stage 1: Segment conversation into Q&A threads using LLM.
         
         Args:
-            transcript: The raw transcript text.
+            conversation: The conversation to segment.
             
         Returns:
-            List of tuples containing (question, answer) pairs.
+            List of Q&A threads.
         """
-        lines = [line.strip() for line in transcript.split('\n') if line.strip()]
-        qa_pairs = []
+        logger.info("Stage 1: Segmenting conversation into threads")
         
-        current_question = None
-        current_answer = []
-        
-        for line in lines:
-            # Skip empty lines
-            if not line:
-                continue
+        # Convert messages to transcript format
+        transcript_lines = []
+        for msg in conversation.messages:
+            if msg.role == "customer":
+                role_prefix = "CUST"
+            elif msg.role == "agent":
+                role_prefix = "AGT"
+            else:
+                continue  # Skip system messages
             
-            # Check if line is from customer (likely a question)
-            if line.startswith('Customer:'):
-                # If we have a previous question and answer, save it
-                if current_question and current_answer:
-                    answer_text = ' '.join(current_answer)
-                    qa_pairs.append((current_question, answer_text))
-                
-                # Start new question
-                current_question = line.replace('Customer:', '').strip()
-                current_answer = []
-            
-            # Check if line is from agent (likely an answer)
-            elif line.startswith('Agent:'):
-                if current_question:  # Only collect answer if we have a question
-                    answer_text = line.replace('Agent:', '').strip()
-                    current_answer.append(answer_text)
+            # Extract time from timestamp (HH:MM format)
+            time_str = msg.timestamp.strftime("%H:%M")
+            transcript_lines.append(f"{role_prefix} {time_str} {msg.content}")
         
-        # Don't forget the last Q&A pair
-        if current_question and current_answer:
-            answer_text = ' '.join(current_answer)
-            qa_pairs.append((current_question, answer_text))
+        transcript = "\n".join(transcript_lines)
         
-        # Filter out pairs where question might not be a real question
-        filtered_pairs = []
-        for question, answer in qa_pairs:
-            if self._is_likely_question(question):
-                filtered_pairs.append((question, answer))
-        
-        return filtered_pairs
-    
-    def _is_likely_question(self, text: str) -> bool:
-        """Determine if a text is likely a question that needs analysis.
-        
-        Args:
-            text: The text to evaluate.
-            
-        Returns:
-            bool: True if the text is likely a question needing analysis.
-        """
-        # Simple heuristics to identify questions
-        question_indicators = [
-            '?',  # Explicit question mark
-            'how',
-            'what',
-            'where',
-            'when',
-            'why',
-            'which',
-            'who',
-            'can you',
-            'could you',
-            'would you',
-            'help',
-            'problem',
-            'issue',
-            'trouble',
-            'need',
-            'want'
+        # Use LLM to segment the transcript
+        prompt = self.prompt_builder.split_prompt(transcript)
+        messages = [
+            {"role": "system", "content": self.prompt_builder.SYSTEM_BASE},
+            {"role": "user", "content": prompt}
         ]
         
-        text_lower = text.lower()
-        
-        # Must have more than just greeting/thanks
-        if len(text.split()) < 3:
-            return False
-        
-        # Check for question indicators
-        for indicator in question_indicators:
-            if indicator in text_lower:
-                return True
-        
-        return False
-    
-    def _analyze_qa_pair(self, question: str, agent_answer: str) -> QuestionAnswerPair:
-        """Analyze a single question-answer pair.
-        
-        Args:
-            question: The customer question.
-            agent_answer: The agent's response.
-            
-        Returns:
-            QuestionAnswerPair: The analyzed Q&A pair with accuracy assessment.
-        """
         try:
-            # Get reference answer from RAG service
-            rag_response = self.rag_client.generate_answer(question)
-            reference_answer = rag_response.answer
+            result = self.llm_client.chat_completion_json(messages)
+            threads_data = result.get("threads", [])
             
-            # Assess accuracy by comparing agent answer with reference
-            accuracy_score, confidence_score, feedback = self._assess_accuracy(
-                question, agent_answer, reference_answer
-            )
+            # Convert to ConversationThread objects
+            threads = []
+            for thread_data in threads_data:
+                thread = ConversationThread(
+                    qid=thread_data.get("qid", f"T{len(threads)+1}"),
+                    question=thread_data["question"],
+                    answer=thread_data["answer"]
+                )
+                threads.append(thread)
             
-            return QuestionAnswerPair(
-                question=question,
-                agent_answer=agent_answer,
-                reference_answer=reference_answer,
-                accuracy_score=accuracy_score,
-                confidence_score=confidence_score,
-                feedback=feedback
-            )
+            return threads
             
+        except LLMClientError as e:
+            logger.error(f"Stage 1 LLM call failed: {e}")
+            # Fallback to simple extraction
+            return self._fallback_extract_qa_pairs(conversation.messages)
+    
+    def _fallback_extract_qa_pairs(self, messages: List[Message]) -> List[ConversationThread]:
+        """Fallback method to extract Q&A pairs without LLM.
+        
+        Args:
+            messages: List of messages in the conversation.
+            
+        Returns:
+            List of Q&A threads.
+        """
+        threads = []
+        pending_questions = []
+        
+        for i, message in enumerate(messages):
+            if message.role == "customer":
+                pending_questions.append(message.content)
+            elif message.role == "agent" and pending_questions:
+                # Combine all pending questions
+                combined_question = " ".join(pending_questions)
+                thread = ConversationThread(
+                    question=combined_question,
+                    answer=message.content
+                )
+                threads.append(thread)
+                pending_questions = []
+        
+        return threads
+    
+    def _stage2_generate_ai_answers(self, question: str, kb_id: str) -> Tuple[List[str], AIAnswers]:
+        """Stage 2: Retrieve KB chunks and generate AI answers.
+        
+        Args:
+            question: The question to answer.
+            kb_id: The knowledge base ID.
+            
+        Returns:
+            Tuple of (kb_chunks, ai_answers).
+        """
+        logger.info(f"Stage 2: Generating AI answers for question: {question[:50]}...")
+        
+        # Retrieve KB chunks from RAG service
+        try:
+            rag_response = self.rag_client.retrieve_chunks(question, k=6)
+            kb_chunks = rag_response.formatted_chunks
+            
+            # Log KB chunks for this question (debug mode only)
+            if self.settings.debug:
+                logger.info("📚 KB CHUNKS RETRIEVED (DEBUG MODE):")
+                logger.info(f"  Question: {question}")
+                logger.info(f"  Number of chunks: {len(kb_chunks)}")
+                for i, chunk in enumerate(kb_chunks):
+                    logger.info(f"    Chunk {i+1}: {chunk[:100]}..." if len(chunk) > 100 else f"    Chunk {i+1}: {chunk}")
+            else:
+                logger.info(f"Retrieved {len(kb_chunks)} KB chunks for question")
+                
         except RAGClientError as e:
-            logger.warning(f"RAG service unavailable, using fallback assessment: {e}")
+            logger.warning(f"RAG service error: {e}")
+            # Use empty chunks as fallback
+            kb_chunks = []
+            if self.settings.debug:
+                logger.info("📚 KB CHUNKS: None (using empty fallback due to RAG error)")
+            else:
+                logger.info("Using empty KB chunks fallback due to RAG error")
+        
+        # Generate AI answers using LLM
+        messages = self.prompt_builder.draft_prompt(question, kb_chunks)
+        
+        try:
+            logger.info(f"Stage 2: Calling LLM with {len(messages)} messages")
+            logger.debug(f"Stage 2: KB chunks count: {len(kb_chunks)}")
+            result = self.llm_client.chat_completion_json(messages)
+            logger.info(f"Stage 2: LLM response received: {result}")
+            logger.debug(f"Stage 2: Response keys: {list(result.keys())}")
             
-            # Fallback assessment when RAG service is unavailable
-            return QuestionAnswerPair(
-                question=question,
-                agent_answer=agent_answer,
-                reference_answer="Reference answer unavailable - RAG service error",
-                accuracy_score=0.5,  # Neutral score when we can't assess
-                confidence_score=0.0,  # No confidence without reference
-                feedback="Unable to assess accuracy - RAG service unavailable"
+            # Parse AI answers
+            suggested_data = result.get("ai_suggested_answer", {})
+            detailed_data = result.get("ai_detailed_answer", {})
+            
+            ai_answers = AIAnswers(
+                suggested=AIAnswer(
+                    answer=suggested_data.get("answer", "I cannot answer this question"),
+                    context=suggested_data.get("context", "")
+                ),
+                detailed=AIAnswer(
+                    answer=detailed_data.get("answer", "I cannot answer this question"),
+                    context=detailed_data.get("context", "")
+                )
             )
+            
+            return kb_chunks, ai_answers
+            
+        except LLMClientError as e:
+            logger.error(f"Stage 2 LLM call failed: {e}")
+            # Return default answers
+            default_answers = AIAnswers(
+                suggested=AIAnswer(answer="Unable to generate answer", context=""),
+                detailed=AIAnswer(answer="Unable to generate answer due to technical error", context="")
+            )
+            return kb_chunks, default_answers
     
-    def _assess_accuracy(
-        self, 
-        question: str, 
-        agent_answer: str, 
-        reference_answer: str
-    ) -> Tuple[float, float, str]:
-        """Assess the accuracy of an agent's answer against a reference answer.
+    def _stage3_score_agent_answer(self, question: str, agent_answer: str, 
+                                   ai_answers: AIAnswers, kb_chunks: List[str]) -> QuestionRating:
+        """Stage 3: Score the agent's answer using LLM.
         
         Args:
-            question: The customer question.
-            agent_answer: The agent's response.
-            reference_answer: The reference answer from RAG.
+            question: The rewritten question.
+            agent_answer: The agent's answer.
+            ai_answers: The AI-generated answers.
+            kb_chunks: The KB chunks used as evidence.
             
         Returns:
-            Tuple of (accuracy_score, confidence_score, feedback).
+            QuestionRating with score and analysis.
         """
-        # Simple accuracy assessment based on keyword overlap and length similarity
+        logger.info("Stage 3: Scoring agent answer")
         
-        # Normalize texts for comparison
-        agent_words = set(re.findall(r'\w+', agent_answer.lower()))
-        reference_words = set(re.findall(r'\w+', reference_answer.lower()))
+        # Prepare bundle for grading
+        bundle = {
+            "question": question,
+            "agent": agent_answer,
+            "ai_suggested": ai_answers.suggested.answer,
+            "ai_detailed": ai_answers.detailed.answer,
+            "kb_evidence": kb_chunks
+        }
         
-        # Calculate word overlap
-        common_words = agent_words.intersection(reference_words)
-        total_unique_words = agent_words.union(reference_words)
+        # Get grading from LLM
+        messages = self.prompt_builder.grade_prompt(bundle)
         
-        if len(total_unique_words) == 0:
-            overlap_score = 0.0
-        else:
-            overlap_score = len(common_words) / len(total_unique_words)
-        
-        # Length similarity (penalize answers that are too short or too long)
-        agent_length = len(agent_answer.split())
-        reference_length = len(reference_answer.split())
-        
-        if reference_length == 0:
-            length_score = 0.5
-        else:
-            length_ratio = min(agent_length, reference_length) / max(agent_length, reference_length)
-            length_score = length_ratio
-        
-        # Combine scores (weighted average)
-        accuracy_score = (overlap_score * 0.7) + (length_score * 0.3)
-        
-        # Confidence is higher when we have good overlap and similar length
-        confidence_score = min(overlap_score + length_score * 0.5, 1.0)
-        
-        # Generate feedback
-        if accuracy_score >= 0.8:
-            feedback = "Excellent response - closely matches reference answer"
-        elif accuracy_score >= 0.6:
-            feedback = "Good response - covers most key points from reference"
-        elif accuracy_score >= 0.4:
-            feedback = "Adequate response - some alignment with reference answer"
-        else:
-            feedback = "Response differs significantly from reference answer"
-        
-        return accuracy_score, confidence_score, feedback
-    
-    def _calculate_overall_score(self, qa_pairs: List[QuestionAnswerPair]) -> float:
-        """Calculate the overall quality score for all Q&A pairs.
-        
-        Args:
-            qa_pairs: List of analyzed Q&A pairs.
+        try:
+            result = self.llm_client.chat_completion_json(messages)
             
-        Returns:
-            float: Overall score between 0.0 and 1.0.
-        """
-        if not qa_pairs:
-            return 0.0
-        
-        # Calculate weighted average of accuracy scores
-        total_weighted_score = 0.0
-        total_weight = 0.0
-        
-        for pair in qa_pairs:
-            # Weight by confidence - more confident assessments have more impact
-            weight = max(pair.confidence_score, 0.1)  # Minimum weight to avoid zero
-            total_weighted_score += pair.accuracy_score * weight
-            total_weight += weight
-        
-        return total_weighted_score / total_weight if total_weight > 0 else 0.0 
+            ai_score = result.get("ai_score", 0)
+            ai_rationale = result.get("ai_rational", result.get("ai_rationale", "Unable to generate rationale"))
+            kb_verify = result.get("kb_verify", kb_chunks)
+            
+            return QuestionRating(
+                aiRewrittenQuestion=question,
+                agentAnswer=agent_answer,
+                aiSuggestedAnswer=ai_answers.suggested.answer,
+                aiLongAnswerInternal=ai_answers.detailed.answer,
+                aiScore=float(ai_score),
+                aiRationale=ai_rationale,
+                kbVerifyInternal=kb_verify
+            )
+            
+        except LLMClientError as e:
+            logger.error(f"Stage 3 LLM call failed: {e}")
+            # Return a default rating
+            return QuestionRating(
+                aiRewrittenQuestion=question,
+                agentAnswer=agent_answer,
+                aiSuggestedAnswer=ai_answers.suggested.answer,
+                aiLongAnswerInternal=ai_answers.detailed.answer,
+                aiScore=0.0,
+                aiRationale="Unable to score due to technical error",
+                kbVerifyInternal=kb_chunks
+            ) 
