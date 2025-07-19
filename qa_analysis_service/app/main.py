@@ -3,8 +3,9 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from app.config import settings
 from app.models.analysis import AnalysisRequest, AnalysisResponse
@@ -26,6 +27,31 @@ logger = logging.getLogger(__name__)
 analysis_service: Optional[AnalysisService] = None
 rag_client: Optional[RAGClient] = None
 llm_client: Optional[LLMClient] = None
+
+
+# Security
+security = HTTPBearer(auto_error=False)
+
+
+async def verify_token(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Verify X-Token authentication."""
+    # Check for X-Token header first (preferred method)
+    x_token = request.headers.get("X-Token")
+    if x_token:
+        if x_token == settings.qa_service_token:
+            return True
+        else:
+            raise HTTPException(status_code=401, detail="Invalid X-Token")
+    
+    # Fallback to Authorization header with Bearer token
+    if credentials:
+        if credentials.credentials == settings.qa_service_token:
+            return True
+        else:
+            raise HTTPException(status_code=401, detail="Invalid Bearer token")
+    
+    # No token provided
+    raise HTTPException(status_code=401, detail="Authentication required")
 
 
 @asynccontextmanager
@@ -95,7 +121,7 @@ async def root():
 
 
 @app.get("/health")
-async def health_check():
+async def health_check(authenticated: bool = Depends(verify_token)):
     """Health check endpoint."""
     # Check if services are initialized
     if not analysis_service:
@@ -114,7 +140,10 @@ async def health_check():
 
 
 @app.post("/aiqa/analysis/analyze", response_model=AnalysisResponse)
-async def analyze_conversation(request: AnalysisRequest):
+async def analyze_conversation(
+    request: AnalysisRequest,
+    authenticated: bool = Depends(verify_token)
+):
     """Analyze a conversation and return QA analysis results.
     
     This endpoint implements the 3-stage analysis algorithm:

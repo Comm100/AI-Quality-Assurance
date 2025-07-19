@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     api_version: str = "1.0.0"
     debug: bool = os.getenv("DEBUG", "false").lower() == "true"
     
+    # API Authentication
+    qa_service_token: str = os.getenv("QA_SERVICE_TOKEN", "cc9dfc7473d3486dac06e1634d4ce38e")
+    
     # RAG service configuration
     rag_service_url: str = os.getenv("RAG_SERVICE_URL", "https://mqapi.testing.comm100dev.io/vectorservice/aicopilots/05f11090-cd5d-4e3f-c131-08ddc57917f0")
     rag_service_timeout: int = int(os.getenv("RAG_SERVICE_TIMEOUT", "60"))
