@@ -13,8 +13,10 @@ class Settings(BaseSettings):
     debug: bool = os.getenv("DEBUG", "false").lower() == "true"
     
     # RAG service configuration
-    rag_service_url: str = os.getenv("RAG_SERVICE_URL", "http://localhost:8002")
+    rag_service_url: str = os.getenv("RAG_SERVICE_URL", "https://mqapi.testing.comm100dev.io/vectorservice/aicopilots/05f11090-cd5d-4e3f-c131-08ddc57917f0")
     rag_service_timeout: int = int(os.getenv("RAG_SERVICE_TIMEOUT", "60"))
+    rag_service_token: str = os.getenv("RAG_SERVICE_TOKEN", "cc9dfc7473d3486dac06e1634d4ce38e")
+    rag_service_site_id: str = os.getenv("RAG_SERVICE_SITE_ID", "10001")
     
     # Chat data service configuration
     chat_data_service_url: str = os.getenv("CHAT_DATA_SERVICE_URL", "http://localhost:8001")

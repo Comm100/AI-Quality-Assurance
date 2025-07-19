@@ -333,16 +333,16 @@ How many visitor status codes exist?
     # ─────────────────────── PROMPT CONSTRUCTORS ───────────────────────
     
     @staticmethod
-    def split_prompt(transcript: str) -> str:
+    def split_prompt(transcript: str) -> List[Dict]:
         """Build prompt for Stage 1: Thread segmentation.
         
         Args:
             transcript: The chat transcript to segment.
             
         Returns:
-            The formatted prompt string.
+            List of messages for the chat completion.
         """
-        return (
+        user_msg = (
             "### Plan\n"
             "- Read transcript.\n"
             "- Group consecutive customer turns pursuing the SAME intent.\n"
@@ -356,6 +356,11 @@ How many visitor status codes exist?
             "### Output\n"
             "Return JSON: {\"threads\":[{\"qid\":\"T1\",\"question\":\"...\",\"answer\":\"...\"}]}"
         )
+        
+        return [
+            {"role": "system", "content": PromptBuilder.SYSTEM_BASE},
+            {"role": "user", "content": user_msg}
+        ]
     
     @staticmethod
     def draft_prompt(question: str, passages: List[str]) -> List[Dict]:

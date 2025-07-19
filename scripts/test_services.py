@@ -53,39 +53,51 @@ def test_chat_data_service() -> bool:
         return False
 
 
-def test_rag_service() -> bool:
-    """Test the RAG Service v2."""
-    print("\n🧪 Testing RAG Service v2...")
+def test_real_rag_service() -> bool:
+    """Test the Real RAG Service."""
+    print("\n🧪 Testing Real RAG Service...")
     
-    # Test health
-    if not test_service_health("http://localhost:8002/health", "RAG Service"):
-        return False
-    
-    # Test retrieving chunks
+    # Test the real RAG service directly
     try:
-        test_request = {
-            "question": "How do I filter unpaid invoices?",
-            "k": 6
+        rag_url = "https://mqapi.testing.comm100dev.io/vectorservice/aicopilots/05f11090-cd5d-4e3f-c131-08ddc57917f0/topSegments?siteId=10001"
+        headers = {
+            'X-Token': 'cc9dfc7473d3486dac06e1634d4ce38e',
+            'Content-Type': 'application/json'
         }
         
-        response = requests.post(
-            "http://localhost:8002/retrieve-chunks", 
-            json=test_request,
-            timeout=10
-        )
+        test_request = {
+            "questions": ["How do I filter unpaid invoices?"]
+        }
         
-        if response.status_code == 200:
-            result = response.json()
-            print(f"✅ Retrieved {len(result['chunks'])} KB chunks")
-            if result['chunks']:
-                print(f"✅ Top chunk: {result['chunks'][0]['content'][:50]}...")
-                print(f"✅ Confidence: {result['chunks'][0]['confidence']}")
-            return True
+        response = requests.post(rag_url, headers=headers, json=test_request, timeout=30)
+        response.raise_for_status()
+        
+        result = response.json()
+        print(f"✅ Real RAG Service Response: {len(result)} items")
+        
+        if result and len(result) > 0:
+            first_item = result[0]
+            if "topSegments" in first_item:
+                segments = first_item["topSegments"]
+                print(f"✅ Retrieved {len(segments)} KB segments")
+                
+                # Show all KB segments in detail
+                print(f"\n📚 All KB Segments Retrieved:")
+                for i, segment in enumerate(segments[:3], 1):  # Show top 3
+                    print(f"  Segment {i}:")
+                    print(f"    Content: {segment.get('segment', '')[:100]}...")
+                    print(f"    File: {segment.get('file', 'Unknown')}")
+                    print(f"    Score: {segment.get('score', 0):.3f}")
+                    print()
+            else:
+                print("⚠️  No topSegments found in response")
         else:
-            print(f"❌ Failed to retrieve chunks: {response.status_code}")
-            return False
+            print("⚠️  Empty response from RAG service")
+            
+        return True
+        
     except Exception as e:
-        print(f"❌ Error testing RAG Service: {e}")
+        print(f"❌ Error testing Real RAG Service: {e}")
         return False
 
 
@@ -168,10 +180,9 @@ def test_qa_analysis_service() -> bool:
             print(f"✅ Analysis completed for conversation {result['conversationId']}")
             print(f"✅ Conversation type: {result['conversationType']}")
             print(f"✅ Number of question ratings: {len(result['questionRatings'])}")
-            print(f"✅ Overall accuracy: {result['overallAccuracy']}/5.0")
             
             print("\n--- 3-Stage Analysis Details ---")
-            
+
             # Show details for each question rating
             if result['questionRatings']:
                 for i, rating in enumerate(result['questionRatings']):
@@ -181,6 +192,15 @@ def test_qa_analysis_service() -> bool:
                     print(f"  🤖 Stage 2 - AI Suggested Answer: {rating['aiSuggestedAnswer']}")
                     print(f"  📊 Stage 3 - AI Score: {rating['aiScore']}/5.0")
                     print(f"  📝 Stage 3 - AI Rationale: {rating['aiRationale']}")
+                    
+                    # Show KB verification chunks (verified context passed to Stage 3)
+                    kb_chunks = rating.get('kbVerifyInternal', [])
+                    if kb_chunks:
+                        print(f"  🔍 Stage 3 - KB Verification Chunks ({len(kb_chunks)}):")
+                        for j, chunk in enumerate(kb_chunks, 1):
+                            print(f"    Chunk {j}: {chunk[:100]}...")
+                    else:
+                        print(f"  ⚠️  Stage 3 - No KB verification chunks found")
             else:
                 print("No question ratings were generated from the conversation.")
             
@@ -207,7 +227,7 @@ def main():
     # Test each service
     services = [
         ("Chat Data Service", test_chat_data_service),
-        ("RAG Service v2", test_rag_service),
+        ("Real RAG Service", test_real_rag_service),
         ("QA Analysis Service", test_qa_analysis_service)
     ]
     

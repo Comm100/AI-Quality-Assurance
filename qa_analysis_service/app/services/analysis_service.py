@@ -64,17 +64,20 @@ class AnalysisService:
             
             for thread in threads:
                 # Stage 2: Retrieve KB chunks and generate AI answers
-                kb_chunks, ai_answers = self._stage2_generate_ai_answers(
+                ai_answers = self._stage2_generate_ai_answers(
                     thread.question, 
                     request.integratedKbId
                 )
                 
-                # Stage 3: Score the agent's answer
+                # Extract verified KB chunks from AI answers context
+                verified_kb_chunks = self._extract_verified_kb_chunks(ai_answers)
+                
+                # Stage 3: Score the agent's answer using verified KB chunks
                 rating = self._stage3_score_agent_answer(
                     thread.question,
                     thread.answer,
                     ai_answers,
-                    kb_chunks
+                    verified_kb_chunks
                 )
                 
                 question_ratings.append(rating)
@@ -129,11 +132,7 @@ class AnalysisService:
             return []
         
         # Use LLM to segment the transcript
-        prompt = self.prompt_builder.split_prompt(transcript)
-        messages = [
-            {"role": "system", "content": self.prompt_builder.SYSTEM_BASE},
-            {"role": "user", "content": prompt}
-        ]
+        messages = self.prompt_builder.split_prompt(transcript)
         
         try:
             result = self.llm_client.chat_completion_json(messages)
@@ -183,7 +182,7 @@ class AnalysisService:
         
         return threads
     
-    def _stage2_generate_ai_answers(self, question: str, kb_id: str) -> Tuple[List[str], AIAnswers]:
+    def _stage2_generate_ai_answers(self, question: str, kb_id: str) -> AIAnswers:
         """Stage 2: Retrieve KB chunks and generate AI answers.
         
         Args:
@@ -191,7 +190,7 @@ class AnalysisService:
             kb_id: The knowledge base ID.
             
         Returns:
-            Tuple of (kb_chunks, ai_answers).
+            AIAnswers: The AI-generated answers with context.
         """
         logger.info(f"Stage 2: Generating AI answers for question: {question[:50]}...")
         
@@ -244,7 +243,7 @@ class AnalysisService:
                 )
             )
             
-            return kb_chunks, ai_answers
+            return ai_answers
             
         except LLMClientError as e:
             logger.error(f"Stage 2 LLM call failed: {e}")
@@ -253,7 +252,32 @@ class AnalysisService:
                 suggested=AIAnswer(answer="Unable to generate answer", context=""),
                 detailed=AIAnswer(answer="Unable to generate answer due to technical error", context="")
             )
-            return kb_chunks, default_answers
+            return default_answers
+    
+    def _extract_verified_kb_chunks(self, ai_answers: AIAnswers) -> List[str]:
+        """Extract verified KB chunks from AI answers context.
+        
+        Args:
+            ai_answers: The AI-generated answers with context.
+            
+        Returns:
+            List of verified KB chunks extracted from the context.
+        """
+        verified_chunks = []
+        
+        # Extract context from suggested answer
+        if ai_answers.suggested.context:
+            verified_chunks.append(f"Suggested Answer Context: {ai_answers.suggested.context}")
+        
+        # Extract context from detailed answer
+        if ai_answers.detailed.context:
+            verified_chunks.append(f"Detailed Answer Context: {ai_answers.detailed.context}")
+        
+        # If no context found, return empty list
+        if not verified_chunks:
+            logger.warning(f"No context found in AI answers for KB verification. Suggested context: '{ai_answers.suggested.context}', Detailed context: '{ai_answers.detailed.context}'")
+        
+        return verified_chunks
     
     def _stage3_score_agent_answer(self, question: str, agent_answer: str, 
                                    ai_answers: AIAnswers, kb_chunks: List[str]) -> QuestionRating:

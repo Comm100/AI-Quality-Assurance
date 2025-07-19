@@ -61,13 +61,8 @@ def main():
             "cwd": os.path.join(project_root, "dummy_services", "chat_data_service")
         },
         {
-            "name": "RAG Service", 
-            "command": "python main.py",
-            "cwd": os.path.join(project_root, "dummy_services", "rag_service")
-        },
-        {
             "name": "QA Analysis Service",
-            "command": "python main.py",
+            "command": "PYTHONPATH=. python app/main.py",
             "cwd": os.path.join(project_root, "qa_analysis_service")
         }
     ]
@@ -88,8 +83,8 @@ def main():
             
             print("\n📋 Services starting up...")
             print("   • Chat Data Service: http://localhost:8001")
-            print("   • RAG Service: http://localhost:8002") 
             print("   • QA Analysis Service: http://localhost:8000")
+            print("   • Real RAG Service: https://mqapi.testing.comm100dev.io/...")
             print("\nPress Ctrl+C to stop all services\n")
             
             # Wait for all services
